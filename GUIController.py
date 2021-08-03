@@ -1,73 +1,73 @@
-import pyautogui
 import time
+import operator
+from multiprocessing import Process, Manager
 from selenium.common import exceptions
 from selenium import webdriver
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver import ActionChains
-import TwitchController
 
 
 class GUIController:
 
-    def __init__(self, top_left_coords=[376, 193], test_mode=False, puzzle_mode=False):
-        # puzzle top left coords for testing: [312, 143]
-        # puzzle tile size: 114
-
-        self.SCREEN_SIZE = pyautogui.size()
-        # size of each tile on chessboard in pixels
-        self.CHESS_TILE_SIZE = 100
-        # size of the whole chess board for overlay approximation
-        self.CHESS_BOARD_SIZE = [self.CHESS_TILE_SIZE * 8, self.CHESS_TILE_SIZE * 8]
-        # coordinates of the top left corner of the chess board
-        self.TOP_LEFT_COORDS = top_left_coords
-        # center coordinates of each tile with its associated board name
-        self.chess_board = {}
-        self.PIECES = ['K', 'Q', 'R', 'B', 'N', 'P']
+    def __init__(self):
         self.COLS = {1: 'a', 2: 'b', 3: 'c', 4: 'd', 5: 'e', 6: 'f', 7: 'g', 8: 'h'}
         self.DRIVER = self.Create_Browser_Session()
-        '''
-        DEPRECATED
-        self.piece_locations = {'P1': [0, 0], 'P2': [100, 0], 'P3': [200, 0], 'P4': [300, 0],
-                                'P5': [400, 0], 'P6': [500, 0], 'P7': [600, 0], 'P8': [700, 0],
-                                'R1': [0, 100], 'N1': [100, 100], 'B1': [200, 100], 'Q': [300, 100], 'K': [400, 100],
-                                'B2': [500, 100], 'N2': [600, 100], 'R2': [700, 100]}
-        '''
-        self.white_pieces, self.black_pieces = self.Update_Piece_Locations()
+        self.white_pieces = []
+        self.black_pieces = []
+        self.wait_time = 5
+        self.max_promotion_attempts = 5
 
-        if puzzle_mode:
-            self.TOP_LEFT_COORDS = [312, 143]
-            self.CHESS_TILE_SIZE = 114
-            self.CHESS_BOARD_SIZE = [self.CHESS_TILE_SIZE * 8, self.CHESS_TILE_SIZE * 8]
+    def Run(self, current_turn, mode):
+        # main program loop
+        while True:
+            # waits n seconds for twitch user input
+            time.sleep(self.wait_time)
 
-        self.Setup_Chess_Board(test_mode)
+            print("\nCompiling Votes!")
+            user_selected_move = self.Get_Most_Voted_Move(current_turn)
 
-        pyautogui.PAUSE = 0.05
+            if user_selected_move is not None:
+                user_selected_move = user_selected_move.split(" ")
+                print("Attempting to move piece")
+                successful_move = self.Move_Piece(user_selected_move[0], user_selected_move[1], current_turn, mode)
+                if successful_move:
+                    print("Moved", user_selected_move[0], "to", user_selected_move[1], "\n")
+                else:
+                    print("Move", user_selected_move[0], "to", user_selected_move[1], "was unsuccessful\n")
+                    for piece in self.white_pieces:
+                        print(piece.get_attribute('class'))
+            else:
+                print("No moves entered\n")
 
-    def Create_Browser_Session(self):
-        driver = webdriver.Firefox()
+    @staticmethod
+    def Create_Browser_Session():
+        profile = webdriver.FirefoxProfile(r"C:\Users\danie\AppData\Roaming\Mozilla\Firefox\Profiles\t2kc6i54.Default User")
+        driver = webdriver.Firefox(profile)
 
         # runs the browser session
         driver.get("https://www.chess.com/play/computer")
 
         # closes opening popup
-        WebDriverWait(driver, 20).until(EC.element_to_be_clickable(
-            (By.XPATH, "/html/body/div[2]/div[7]/div/div/button"))).click()
+        try:
+            WebDriverWait(driver, 3).until(EC.element_to_be_clickable(
+                (By.XPATH, "/html/body/div[2]/div[7]/div/div/button"))).click()
+        except exceptions.TimeoutException:
+            print("Opening popup likely not found: Timeout Exception")
 
         return driver
 
     def Update_Piece_Locations(self):
         white_pieces = []
         black_pieces = []
-        # possible_moves = dict()
 
         # makes a list of all the pieces on the board
-        pieces = WebDriverWait(self.DRIVER, 20).until(
-            EC.presence_of_all_elements_located((By.XPATH, '//*[@id="board-vs-personalities"]/div')))
+        coordinates = self.DRIVER.find_element_by_class_name("coordinates")
+        board_menu = coordinates.find_element_by_xpath("..")
+        pieces = board_menu.find_elements_by_tag_name("div")
 
         for piece in pieces:
-
             # grabs all white pieces
             if piece.get_attribute("class").find("piece w") != -1:
                 white_pieces.append(piece)
@@ -76,24 +76,10 @@ class GUIController:
             if piece.get_attribute("class").find("piece b") != -1:
                 black_pieces.append(piece)
 
-                '''
-                (THIS WON'T WORK, TRY SOMETHING ELSE)
-                Grabs all possible moves a piece can make
-                Adds piece to dictionary as key
-                
-                try:
-                    piece.click()
-                    moves = (self.DRIVER.find_elements_by_css_selector('[data-test-element="hint"]'))
-                    for move in moves:
-                        location = self.Format_Location(move)
-                        print("    " + location[0] + location[1])
-                except exceptions.NoSuchElementException:
-                    possible_moves[piece] = None
-                '''
+        self.white_pieces = white_pieces
+        self.black_pieces = black_pieces
 
-        return white_pieces, black_pieces
-
-    def Move_Piece(self, selected_piece, move_to):
+    def Move_Piece(self, selected_piece, move_to, current_turn, mode):
         action_chains = ActionChains(self.DRIVER)
 
         piece = self.Find_Piece(selected_piece)
@@ -106,12 +92,17 @@ class GUIController:
                 for move in possible_moves:
                     if self.Unformat_Location(move_to) in move.get_attribute('class'):
                         action_chains.drag_and_drop(piece, move).perform()
+                        self.Check_Game_Over()
+                        self.Check_Pawn_Promotion(current_turn, mode)
+                        print("Completed")
+                        return True
+                return False
 
-            except exceptions.NoSuchElementException:
-                print("No moves exist")
+            except (exceptions.NoSuchElementException, exceptions.StaleElementReferenceException) as e:
+                print("Exception Raised:", e)
+                return False
 
     def Find_Piece(self, location):
-
         # gets updated piece locations
         self.Update_Piece_Locations()
         location = self.Unformat_Location(location)
@@ -140,78 +131,67 @@ class GUIController:
 
         return str(col) + str(row)
 
-    # ----- DEPRECATED CODE -----
+    def Check_Pawn_Promotion(self, current_turn, mode):
+        try:
+            promotion_menu = self.DRIVER.find_element_by_css_selector(".promotion-window")
+            x_button = promotion_menu.find_element_by_tag_name("i")
+            promotions = promotion_menu.find_elements_by_tag_name("div")
 
-    def Setup_Chess_Board(self, test_mode=False):
-        y = self.TOP_LEFT_COORDS[1] + self.CHESS_BOARD_SIZE[1] - (self.CHESS_TILE_SIZE / 2)
+            if len(promotions) > 0:
+                self.Enter_Promotion_Mode(promotions, x_button, current_turn, mode)
+        except (exceptions.TimeoutException, exceptions.NoSuchElementException) as e:
+            print("No pawn promotion:", e)
 
-        for col in range(1, 9):
-            x = self.TOP_LEFT_COORDS[0] + (self.CHESS_TILE_SIZE / 2)
+    def Check_Game_Over(self):
+        return None
 
-            for row in range(97, 105):
-                tile_name = chr(row) + str(col)
+    def Enter_Promotion_Mode(self, promotions, x_button, current_turn, mode):
+        mode.value = 1
+        for attempt in range(self.max_promotion_attempts):
+            print("    Promotion Attempt:", attempt+1)
+            time.sleep(self.wait_time)
 
-                # sets each tile_name with its appropriate coordinates
-                self.chess_board[tile_name] = [x, y]
+            user_selected_promotion = self.Get_Most_Voted_Move(current_turn)
 
-                if test_mode:
-                    print(tile_name + str([x, y]))
-                    pyautogui.moveTo(x, y)
+            # Presses X button when undo is selected
+            if user_selected_promotion == "undo":
+                print("    Undo Promotion Selected by Chat")
+                try:
+                    x_button.click()
+                except exceptions.ElementNotInteractableException:
+                    print("Failed to click x button")
+                mode.value = 0
+                break
+            if user_selected_promotion is not None:
+                self.Promote_Pawn(promotions, user_selected_promotion)
+                mode.value = 0
+                return
 
-                x += self.CHESS_TILE_SIZE
+        # Presses X button when promotion fails
+        try:
+            x_button.click()
+        except exceptions.ElementNotInteractableException:
+            print("Failed to click x button")
 
-            y -= self.CHESS_TILE_SIZE
+        mode.value = 0
 
-    def Move_Piece_Old(self, chat_input):
-        # checks for correct input
-        if 0 < len(chat_input) <= 5:
-            moves = chat_input.split(" ")
+    @staticmethod
+    def Promote_Pawn(promotions, user_selection):
+        for promotion in promotions:
+            if promotion.get_attribute('class')[-1] == user_selection:
+                promotion.click()
+                return
+        print("Failed to click promotion")
 
-            if len(moves) == 2 and moves[0] in self.chess_board and moves[1] in self.chess_board:
-                pyautogui.mouseDown(self.chess_board[moves[0]][0], self.chess_board[moves[0]][1], button="left")
-                pyautogui.moveTo(self.chess_board[moves[1]][0], self.chess_board[moves[1]][1])
-                pyautogui.mouseUp(self.chess_board[moves[1]][0], self.chess_board[moves[1]][1], button="left")
+    @staticmethod
+    def Get_Most_Voted_Move(current_turn):
+        try:
+            max_key = max(current_turn.items(), key=operator.itemgetter(1))[0]
+            print(max_key, current_turn[max_key])
 
-                # checks for pawn promotion chance
-                if self.chess_board[moves[1]][1] == self.chess_board["a8"][1]:
-                    self.Pawn_Promotion(moves, promotion_input="q")
+            # clears the dictionary for next turn
+            current_turn.clear()
 
-            else:
-                print("FAILED")
-
-    def Pawn_Promotion(self, moves, promotion_input):
-        print("Possible pawn promotion!")
-
-        # OPTIONS
-        # turn on overlay with new commands to chose promotion
-        # randomly choose promotion if no one does
-        # ask chat if pawn was promoted
-        # assumes chat knows pawn is being promoted, initiates search in chat for new promotion commands
-
-        if (promotion_input.lower() == "promote q"
-                or promotion_input.lower() == "promote queen"
-                or promotion_input.lower() == "q"):
-            pyautogui.click(x=self.chess_board[moves[1]][0], y=self.chess_board[moves[1]][1], button="left")
-            print(self.chess_board[moves[1]][0], self.chess_board[moves[1]][1])
-        elif (promotion_input.lower() == "promote n"
-              or promotion_input.lower() == "promote knight"
-              or promotion_input.lower() == "n"):
-            pyautogui.click(x=self.chess_board[moves[1]][0],
-                            y=self.chess_board[moves[1]][1] + self.CHESS_TILE_SIZE, button="left")
-        elif (promotion_input.lower() == "promote r"
-              or promotion_input.lower() == "promote rook"
-              or promotion_input.lower() == "r"):
-            pyautogui.click(x=self.chess_board[moves[1]][0],
-                            y=self.chess_board[moves[1]][1] + 2 * self.CHESS_TILE_SIZE, button="left")
-        elif (promotion_input.lower() == "promote b"
-              or promotion_input.lower() == "promote bishop"
-              or promotion_input.lower() == "b"):
-            pyautogui.click(x=self.chess_board[moves[1]][0],
-                            y=self.chess_board[moves[1]][1] + 3 * self.CHESS_TILE_SIZE, button="left")
-
-
-# tc = TwitchController.TwitchController()
-# time.sleep(5)
-# GUIController([376, 193], False, True).Move_Piece("h7 h8")
-controller = GUIController()
-controller.Move_Piece("e2", "e5")
+            return max_key
+        except ValueError as e:
+            return None
